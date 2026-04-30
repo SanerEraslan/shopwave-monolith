@@ -1,0 +1,63 @@
+services:
+
+  # ─────────────────────────────────────────────────────────────
+  # Tek veritabanı — gerçek monolith.
+  # Catalog, Inventory, Order, Audit hepsi aynı postgres instance'ında.
+  #
+  # LAB NOTU (Servis Ayrımı):
+  #   İlerideki lab'da inventory-service ayrılacak ve
+  #   buraya ikinci bir DB servisi eklenecek. Bu noktada
+  #   cross-service transaction sorunları gözlemlenecek.
+  # ─────────────────────────────────────────────────────────────
+  db:
+    image: postgres:15
+    container_name: shopwave-db
+    environment:
+      POSTGRES_DB:       shopwave
+      POSTGRES_USER:     shopwave
+      POSTGRES_PASSWORD: shopwave
+    ports:
+      - "5432:5432"
+    volumes:
+      - shopwave-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopwave -d shopwave"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ─────────────────────────────────────────────────────────────
+  # Tek backend — tüm iş mantığı burada.
+  # ─────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    container_name: shopwave-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST:     db
+      DB_PORT:     5432
+      DB_NAME:     shopwave
+      DB_USER:     shopwave
+      DB_PASSWORD: shopwave
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    # LAB-1 placeholder — structured logging aktif edilince buraya env var eklenecek
+    # SHOPWAVE_LOGGING_CORRELATION_ID_ENABLED: "true"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+    container_name: shopwave-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  shopwave-db-data:
