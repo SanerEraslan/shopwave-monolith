@@ -18,36 +18,23 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.Random;
 
 /**
  * OrderService — sipariş iş akışının kalbi.
- *
- * ┌─────────────────────────────────────────────────────────────────┐
- * │  Monolith'te placeOrder() tek bir @Transactional içinde:        │
- * │    1. Müşteri doğrulanır                                        │
- * │    2. Her ürün için stok rezerve edilir  (InventoryService)     │
- * │    3. Order + OrderItem'lar kaydedilir                          │
- * │    4. Audit log yazılır                                         │
- * │  → Herhangi bir adım başarısız olursa HEPSİ rollback olur.     │
- * │  → Bu "free atomicity" dağıtık mimaride KAYBOLUR.              │
- * └─────────────────────────────────────────────────────────────────┘
- *
- * LAB NOTU (Servis Ayrımı):
- *   InventoryService ayrı process'e taşındığında adım 2 HTTP çağrısı olur.
- *   HTTP başarılı ama DB commit başarısız olursa stok rezerve ama sipariş yok.
- *   HTTP başarısız ama timeout belirsiz olursa stok rezerve mi değil mi bilinmez.
- *   Çözüm: Saga Pattern (choreography veya orchestration).
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class OrderService {
 
-    private final OrderRepository    orderRepository;
+    private final OrderRepository orderRepository;
     private final CustomerRepository customerRepository;
-    private final ProductRepository  productRepository;
-    private final InventoryService   inventoryService;
-    private final AuditService       auditService;
+    private final ProductRepository productRepository;
+    private final InventoryService inventoryService;
+    private final AuditService auditService;
+
+    private final Random random = new Random();
 
     // ─── Queries ──────────────────────────────────────────────
 
@@ -75,15 +62,21 @@ public class OrderService {
 
     /**
      * Sipariş ver.
-     *
-     * Tüm işlemler tek @Transactional boundary içinde.
-     * Stok rezervasyonu ve sipariş kaydı atomik — ya hepsi, ya hiçbiri.
+     * * LAB-2 kapsamında yapay gecikme enjekte edilmiştir.
      */
     @Transactional
     public OrderDto placeOrder(PlaceOrderRequest req) {
-        // TODO LAB-5: X-Idempotency-Key kontrolü
-        // TODO LAB-4: Timeout deadline — bu metot X ms'den uzun sürerse TimeoutException fırlat
-        // TODO LAB-2: Chaos delay — yapay gecikme enjekte et
+
+        try {
+
+            int delay = 200 + random.nextInt(300);
+            log.info("LAB-2: Injecting chaos delay: {}ms", delay);
+            Thread.sleep(delay);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Chaos delay interrupted", e);
+        }
+        // ─────────────────────────────────────────────────────────
 
         Customer customer = customerRepository.findById(req.getCustomerId())
                 .orElseThrow(() -> new NotFoundException("Customer not found: " + req.getCustomerId()));
@@ -96,7 +89,6 @@ public class OrderService {
                 .items(new ArrayList<>())
                 .build();
 
-        // Her sipariş kalemi için: ürünü bul, stok rezerve et, item ekle
         for (PlaceOrderRequest.OrderItemRequest itemReq : req.getItems()) {
             Product product = productRepository.findByIdWithLock(itemReq.getProductId())
                     .orElseThrow(() -> new NotFoundException("Product not found: " + itemReq.getProductId()));
@@ -105,8 +97,6 @@ public class OrderService {
                 throw new IllegalArgumentException("Product is not active: " + product.getSku());
             }
 
-            // InventoryService.reserve() bu transaction'a katılır.
-            // Dağıtık mimaride bu satır HTTP çağrısına dönüşecek → atomiklik bozulacak.
             inventoryService.reserve(product.getId(), itemReq.getQuantity());
 
             OrderItem item = OrderItem.builder()
@@ -123,7 +113,7 @@ public class OrderService {
 
         auditService.log("ORDER_PLACED", "Order", order.getId(),
                 "ref=" + order.getOrderRef() + " total=" + order.getTotalAmount()
-                + " items=" + order.getItems().size());
+                        + " items=" + order.getItems().size());
 
         log.info("Order placed ref={} customerId={} total={}",
                 order.getOrderRef(), customer.getId(), order.getTotalAmount());
@@ -161,7 +151,6 @@ public class OrderService {
         order.setStatus(OrderStatus.DELIVERED);
         orderRepository.save(order);
 
-        // Fiziksel stoktan düş
         for (OrderItem item : order.getItems()) {
             inventoryService.deduct(item.getProduct().getId(), item.getQuantity());
         }
@@ -181,7 +170,6 @@ public class OrderService {
         order.setStatus(OrderStatus.CANCELLED);
         orderRepository.save(order);
 
-        // Rezervasyonu geri bırak
         for (OrderItem item : order.getItems()) {
             inventoryService.release(item.getProduct().getId(), item.getQuantity());
         }
@@ -201,7 +189,7 @@ public class OrderService {
     private void requireStatus(Order order, OrderStatus expected) {
         if (order.getStatus() != expected) {
             throw new InvalidOrderStateException(
-                "Expected status %s but was %s".formatted(expected, order.getStatus()));
+                    "Expected status %s but was %s".formatted(expected, order.getStatus()));
         }
     }
 
@@ -210,15 +198,15 @@ public class OrderService {
     }
 
     OrderDto toDto(Order o) {
-        List<OrderItemDto> items = o.getItems() == null ? List.of() :
-            o.getItems().stream().map(i -> OrderItemDto.builder()
-                .productId(i.getProduct().getId())
-                .sku(i.getProduct().getSku())
-                .productName(i.getProduct().getName())
-                .quantity(i.getQuantity())
-                .unitPrice(i.getUnitPrice())
-                .lineTotal(i.lineTotal())
-                .build()).toList();
+        List<OrderItemDto> items = o.getItems() == null ? List.of()
+                : o.getItems().stream().map(i -> OrderItemDto.builder()
+                        .productId(i.getProduct().getId())
+                        .sku(i.getProduct().getSku())
+                        .productName(i.getProduct().getName())
+                        .quantity(i.getQuantity())
+                        .unitPrice(i.getUnitPrice())
+                        .lineTotal(i.lineTotal())
+                        .build()).toList();
 
         return OrderDto.builder()
                 .id(o.getId())
