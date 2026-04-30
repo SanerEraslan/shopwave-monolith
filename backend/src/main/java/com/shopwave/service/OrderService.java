@@ -66,7 +66,7 @@ public class OrderService {
         }
 
         long startTime = System.currentTimeMillis();
-        long deadlineMs = 400;
+        long deadlineMs = 2000;
 
         try {
             int delay = 200 + random.nextInt(300);
@@ -80,8 +80,7 @@ public class OrderService {
         long timeElapsed = System.currentTimeMillis() - startTime;
         if (timeElapsed > deadlineMs) {
             log.error("LAB-4: Deadline exceeded! Elapsed: {}ms, Limit: {}ms", timeElapsed, deadlineMs);
-            throw new RuntimeException(
-                    "Sipariş işlemi zaman aşımına uğradı (Deadline Exceeded: " + timeElapsed + "ms)");
+            throw new RuntimeException("Sipariş işlemi zaman aşımına uğradı (Deadline Exceeded)");
         }
 
         Customer customer = customerRepository.findById(req.getCustomerId())
@@ -118,8 +117,7 @@ public class OrderService {
         orderRepository.save(order);
 
         auditService.log("ORDER_PLACED", "Order", order.getId(),
-                "ref=" + order.getOrderRef() + " total=" + order.getTotalAmount()
-                        + " items=" + order.getItems().size());
+                "ref=" + order.getOrderRef() + " total=" + order.getTotalAmount());
 
         log.info("Order placed ref={} customerId={} total={}",
                 order.getOrderRef(), customer.getId(), order.getTotalAmount());

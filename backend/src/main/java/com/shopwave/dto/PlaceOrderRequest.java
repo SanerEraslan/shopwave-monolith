@@ -20,6 +20,9 @@ public class PlaceOrderRequest {
     @Valid
     private List<OrderItemRequest> items;
 
+    // LAB-5: Aynı isteğin tekrarını engellemek için kullanılan benzersiz anahtar
+    private String idempotencyKey;
+
     @Data
     public static class OrderItemRequest {
 

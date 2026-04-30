@@ -1,5 +1,6 @@
 package com.shopwave.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore; // Bu import'u ekle
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -9,7 +10,11 @@ import java.util.List;
 
 @Entity
 @Table(name = "customers")
-@Getter @Setter @NoArgsConstructor @AllArgsConstructor @Builder
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 public class Customer {
 
     @Id
@@ -28,10 +33,13 @@ public class Customer {
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
+    @JsonIgnore
     @OneToMany(mappedBy = "customer", fetch = FetchType.LAZY)
     @Builder.Default
     private List<Order> orders = new ArrayList<>();
 
     @PrePersist
-    protected void onCreate() { this.createdAt = OffsetDateTime.now(); }
+    protected void onCreate() {
+        this.createdAt = OffsetDateTime.now();
+    }
 }
