@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
@@ -33,7 +34,7 @@ public class OrderService {
 
     private final Random random = new Random();
 
-    // ─── Queries ──────────────────────────────────────────────
+    private final ConcurrentHashMap<String, OrderDto> idempotencyMap = new ConcurrentHashMap<>();
 
     @Transactional(readOnly = true)
     public OrderDto getById(Long id) {
@@ -58,6 +59,12 @@ public class OrderService {
     @Transactional
     public OrderDto placeOrder(PlaceOrderRequest req) {
 
+        if (req.getIdempotencyKey() != null && idempotencyMap.containsKey(req.getIdempotencyKey())) {
+            log.info("LAB-5: Duplicate request detected for key: {}. Returning cached result.",
+                    req.getIdempotencyKey());
+            return idempotencyMap.get(req.getIdempotencyKey());
+        }
+
         long startTime = System.currentTimeMillis();
         long deadlineMs = 400;
 
@@ -70,11 +77,9 @@ public class OrderService {
             throw new RuntimeException("Chaos delay interrupted", e);
         }
 
-        // ─── LAB-4: Deadline Kontrolü ───
         long timeElapsed = System.currentTimeMillis() - startTime;
         if (timeElapsed > deadlineMs) {
             log.error("LAB-4: Deadline exceeded! Elapsed: {}ms, Limit: {}ms", timeElapsed, deadlineMs);
-
             throw new RuntimeException(
                     "Sipariş işlemi zaman aşımına uğradı (Deadline Exceeded: " + timeElapsed + "ms)");
         }
@@ -119,10 +124,15 @@ public class OrderService {
         log.info("Order placed ref={} customerId={} total={}",
                 order.getOrderRef(), customer.getId(), order.getTotalAmount());
 
-        return toDto(order);
+        OrderDto responseDto = toDto(order);
+
+        if (req.getIdempotencyKey() != null) {
+            idempotencyMap.put(req.getIdempotencyKey(), responseDto);
+        }
+
+        return responseDto;
     }
 
-    /** Siparişi onayla (ödeme alındı). */
     @Transactional
     public OrderDto confirm(Long id) {
         Order order = getOrderForUpdate(id);
@@ -133,7 +143,6 @@ public class OrderService {
         return toDto(order);
     }
 
-    /** Siparişi kargoya ver. */
     @Transactional
     public OrderDto ship(Long id) {
         Order order = getOrderForUpdate(id);
@@ -144,7 +153,6 @@ public class OrderService {
         return toDto(order);
     }
 
-    /** Siparişi teslim edildi olarak işaretle — fiziksel stok düşülür. */
     @Transactional
     public OrderDto deliver(Long id) {
         Order order = getOrderForUpdate(id);
@@ -160,7 +168,6 @@ public class OrderService {
         return toDto(order);
     }
 
-    /** Siparişi iptal et — rezerve edilen stok serbest bırakılır. */
     @Transactional
     public OrderDto cancel(Long id) {
         Order order = getOrderForUpdate(id);
@@ -179,8 +186,6 @@ public class OrderService {
         log.info("Order cancelled ref={}", order.getOrderRef());
         return toDto(order);
     }
-
-    // ─── Helpers ──────────────────────────────────────────────
 
     private Order getOrderForUpdate(Long id) {
         return orderRepository.findByIdWithItems(id)
