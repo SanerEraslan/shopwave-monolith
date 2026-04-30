@@ -20,9 +20,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.Random;
 
-/**
- * OrderService — sipariş iş akışının kalbi.
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -58,17 +55,13 @@ public class OrderService {
                 .stream().map(this::toDto).toList();
     }
 
-    // ─── Commands ─────────────────────────────────────────────
-
-    /**
-     * Sipariş ver.
-     * * LAB-2 kapsamında yapay gecikme enjekte edilmiştir.
-     */
     @Transactional
     public OrderDto placeOrder(PlaceOrderRequest req) {
 
-        try {
+        long startTime = System.currentTimeMillis();
+        long deadlineMs = 400;
 
+        try {
             int delay = 200 + random.nextInt(300);
             log.info("LAB-2: Injecting chaos delay: {}ms", delay);
             Thread.sleep(delay);
@@ -76,7 +69,15 @@ public class OrderService {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Chaos delay interrupted", e);
         }
-        // ─────────────────────────────────────────────────────────
+
+        // ─── LAB-4: Deadline Kontrolü ───
+        long timeElapsed = System.currentTimeMillis() - startTime;
+        if (timeElapsed > deadlineMs) {
+            log.error("LAB-4: Deadline exceeded! Elapsed: {}ms, Limit: {}ms", timeElapsed, deadlineMs);
+
+            throw new RuntimeException(
+                    "Sipariş işlemi zaman aşımına uğradı (Deadline Exceeded: " + timeElapsed + "ms)");
+        }
 
         Customer customer = customerRepository.findById(req.getCustomerId())
                 .orElseThrow(() -> new NotFoundException("Customer not found: " + req.getCustomerId()));
